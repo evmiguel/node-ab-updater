@@ -8,7 +8,8 @@ const app = express();
 const port = 3000;
 
 // JSON FIELDS
-const ELECTRON_COMMAND = 'electronCommand';
+const ELECTRON_VERSION_A = 'electronVersionA';
+const ELECTRON_VERSION_B = 'electronVersionB';
 const APP_DIRECTORY = 'appDirectory';
 const PID_FILE = 'pidFile';
 
@@ -17,9 +18,14 @@ class ElectronRunner {
     let rawCommands = fs.readFileSync('commands.json');
     let jsonData = JSON.parse(rawCommands);
 
-    this.ELECTRON_COMMAND = jsonData[ELECTRON_COMMAND];
+    this.ELECTRON_VERSION_A = jsonData[ELECTRON_VERSION_A];
+    this.ELECTRON_VERSION_B = jsonData[ELECTRON_VERSION_B];
     this.APP_DIRECTORY = jsonData[APP_DIRECTORY];
     this.PID_FILE = jsonData[PID_FILE];
+
+    // this is the 'bit' that gets set
+    this.currentElectronVersion = this.ELECTRON_VERSION_A;
+
   }
 
   getElectronPID = () => {
@@ -42,7 +48,6 @@ class ElectronRunner {
           rej({
             'error': error
           })
-          return
         }
 
         // successfully killed previously running electron
@@ -54,37 +59,45 @@ class ElectronRunner {
     })
   }
 
-  startElectron = () => {
-    exec(`${this.ELECTRON_COMMAND} ${this.APP_DIRECTORY}  & echo $! > ${this.PID_FILE}`, (error, stdout, stderr) => {
-      if (error) {
-        console.error(`exec error: ${error}`);
-        console.error(`exec error code: ${error.code}`);
-        rej({
-          'error': error
-        })
-        return
-      }
+  flipElectronVersion = () => {
+    this.currentElectronVersion = this.currentElectronVersion == this.ELECTRON_VERSION_A
+                                    ? this.ELECTRON_VERSION_B : this.ELECTRON_VERSION_A;
 
-      // successfully started running electron
-      res(0)
-    });
+    return this.currentElectronVersion;
+  }
+
+  startElectron = () => {
+    const electronCommand = this.flipElectronVersion();
+    const command = `${electronCommand} ${this.APP_DIRECTORY}  & echo $! > ${this.PID_FILE}`;
+
+    const child = exec(command, (error, stdout, stderr) => {
+        if (error) {
+          console.error(`exec error: ${error}`);
+          console.error(`exec error code: ${error.code}`);
+          rej({
+            'error': error
+          })
+          rej(error)
+        }
+      });
+
+    return child.pid
   }
 }
 
+const er = new ElectronRunner();
 
 app.get('/', (req, res) => res.send('Hello World!'))
 
 app.post('/update', async (req, res) => {
-  const er = new ElectronRunner();
-
   try {
     let PID = await er.getElectronPID();
     let killOutput = await er.killElectronPID(PID);
+    console.log(`killoutput: ${killOutput}`)
 
     if (killOutput === 0) {
       let electronPID = await er.startElectron();
-      console.log(electronPID)
-      res.sendStatus(200);
+      res.send({ pid: electronPID });
     } else { throw 'something went wrong with the server'; }
 
 
