@@ -3,6 +3,7 @@ const express = require('express');
 const bodyParser = require('body-parser');
 const fs = require('fs');
 const request = require('request');
+const AWS = require('aws-sdk');
 
 // EXPRESS CONSTS
 const app = express();
@@ -16,6 +17,9 @@ const PLATFORM = 'platform';
 const UPDATE_SERVER = 'updateServer';
 const UPDATE_SERVER_USER = 'updateServerUser';
 const UPDATE_SERVER_PASSWORD = 'updateServerPassword'
+const ACCESS_KEY_ID = 'accessKeyId';
+const SECRET_ACCESS_KEY = 'secretAccessKey';
+const BUCKET = 'bucket';
 
 // MIDDLEWARE
 app.use(bodyParser.json());
@@ -32,6 +36,10 @@ class ElectronUpdateManager {
     this.UPDATE_SERVER = jsonData[UPDATE_SERVER];
     this.UPDATE_SERVER_USER = jsonData[UPDATE_SERVER_USER];
     this.UPDATE_SERVER_PASSWORD = jsonData[UPDATE_SERVER_PASSWORD];
+
+    this.ACCESS_KEY_ID = jsonData[ACCESS_KEY_ID];
+    this.SECRET_ACCESS_KEY = jsonData[SECRET_ACCESS_KEY];
+    this.BUCKET = jsonData[BUCKET];
   }
 
   flipElectronUpdate = (currentVersion) => {
@@ -41,16 +49,29 @@ class ElectronUpdateManager {
 
   downloadElectronUpdate = (version) => {
     const filename = `electron-v${version}-${this.OS}-${this.PLATFORM}.zip`
-    const endpoint = `${this.UPDATE_SERVER}/${filename}`;
-    const file = fs.createWriteStream(filename);
-    return new Promise((resolve) => {
-      request(endpoint, {
-        "auth" : {
-          "username" : this.UPDATE_SERVER_USER,
-          "password" : this.UPDATE_SERVER_PASSWORD
+    const key = `electron/${filename}`;
+    const s3 = new AWS.S3({
+      accessKeyId: this.ACCESS_KEY_ID,
+      secretAccessKey: this.SECRET_ACCESS_KEY
+    });
+
+    const params = {
+      Bucket: this.BUCKET,
+      Key: key
+    };
+
+    return new Promise((res, rej) => {
+      s3.getObject(params, function(err, data) {
+        if (err) rej(err); // an error occurred
+        else {
+          fs.writeFile(filename, data.Body, (err) => {
+            if (err) rej(err);
+            res({downloaded: true});
+          })
         }
-      }).pipe(file).on('finish', resolve);
-    })
+      });
+    });
+
   }
 }
 
@@ -64,8 +85,8 @@ app.post('/latest/electron', (req, res) => {
 });
 
 app.get('/download/electron/:version',  async (req, res) => {
-  await em.downloadElectronUpdate(req.params.version);
-  res.sendStatus(200);
+  const data = await em.downloadElectronUpdate(req.params.version);
+  res.send({data: data});
 });
 
 app.listen(port, () => console.log(`Electron Update Manager running on port: ${port}!`))
