@@ -164,7 +164,7 @@ app.get('/download/electron/:version',  async (req, res) => {
   res.send({data: data});
 });
 
-app.post('/install/electron/:version', async (req, res) => {
+app.post('/install/electron/:version', (req, res) => {
   /*
   *  To install the steps are:
   *   1. Unzip the electron dist
@@ -175,19 +175,22 @@ app.post('/install/electron/:version', async (req, res) => {
   const version = req.params.version;
   em.unzipElectron(version);
 
+  res.sendStatus(200);
+});
+
+app.post('/run/electron/:version', async (req, res) => {
   try {
     let PID = await em.getElectronPID();
     let killOutput = await em.killElectronPID(PID);
 
     if (killOutput === 0) {
-      let electronPID = await em.startElectron(version);
+      let electronPID = await em.startElectron(req.params.version);
       res.send({ pid: electronPID });
     } else { throw 'something went wrong with the server'; }
   } catch(e) {
     console.log(e)
     res.sendStatus(500);
   }
-
-});
+})
 
 app.listen(port, () => console.log(`Electron Update Manager running on port: ${port}!`))
