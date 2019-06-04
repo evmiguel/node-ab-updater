@@ -2,8 +2,9 @@
 const express = require('express');
 const bodyParser = require('body-parser');
 const fs = require('fs');
-const request = require('request');
 const AWS = require('aws-sdk');
+const { exec } = require('child_process');
+
 
 // EXPRESS CONSTS
 const app = express();
@@ -12,14 +13,17 @@ const port = 3000;
 // JSON FIELDS
 const ELECTRON_UPDATE_A = 'electronUpdateA';
 const ELECTRON_UPDATE_B = 'electronUpdateB';
+const ELECTRON_BASE_DIR = 'electronBaseDir';
 const OS = 'os';
 const PLATFORM = 'platform';
-const UPDATE_SERVER = 'updateServer';
-const UPDATE_SERVER_USER = 'updateServerUser';
-const UPDATE_SERVER_PASSWORD = 'updateServerPassword'
 const ACCESS_KEY_ID = 'accessKeyId';
 const SECRET_ACCESS_KEY = 'secretAccessKey';
 const BUCKET = 'bucket';
+const APP_DIRECTORY = 'appDirectory';
+const PID_FILE = 'pidFile';
+
+// CONSTS
+const DARWIN = 'darwin';
 
 // MIDDLEWARE
 app.use(bodyParser.json());
@@ -31,15 +35,16 @@ class ElectronUpdateManager {
 
     this.ELECTRON_UPDATE_A = jsonData[ELECTRON_UPDATE_A];
     this.ELECTRON_UPDATE_B = jsonData[ELECTRON_UPDATE_B];
+    this.ELECTRON_BASE_DIR = jsonData[ELECTRON_BASE_DIR];
     this.OS = jsonData[OS];
     this.PLATFORM = jsonData[PLATFORM];
-    this.UPDATE_SERVER = jsonData[UPDATE_SERVER];
-    this.UPDATE_SERVER_USER = jsonData[UPDATE_SERVER_USER];
-    this.UPDATE_SERVER_PASSWORD = jsonData[UPDATE_SERVER_PASSWORD];
 
     this.ACCESS_KEY_ID = jsonData[ACCESS_KEY_ID];
     this.SECRET_ACCESS_KEY = jsonData[SECRET_ACCESS_KEY];
     this.BUCKET = jsonData[BUCKET];
+
+    this.APP_DIRECTORY = jsonData[APP_DIRECTORY];
+    this.PID_FILE = jsonData[PID_FILE];
   }
 
   flipElectronUpdate = (currentVersion) => {
@@ -47,8 +52,14 @@ class ElectronUpdateManager {
       ? this.ELECTRON_UPDATE_B : this.ELECTRON_UPDATE_A;
   }
 
+  getElectronZipFilename = (version) => `electron-v${version}-${this.OS}-${this.PLATFORM}.zip`;
+  getElectronFolderName = (version) => {
+    const zipFilename = this.getElectronZipFilename(version);
+    return zipFilename.substring(0,zipFilename.length - 4);
+  }
+
   downloadElectronUpdate = (version) => {
-    const filename = `electron-v${version}-${this.OS}-${this.PLATFORM}.zip`
+    const filename = this.getElectronZipFilename(version)
     const key = `electron/${filename}`;
     const s3 = new AWS.S3({
       accessKeyId: this.ACCESS_KEY_ID,
@@ -73,12 +84,76 @@ class ElectronUpdateManager {
     });
 
   }
+
+  getElectronPID = () => {
+    return new Promise((res, rej) => {
+      // FIX THIS TO READ PID FILE NAME FROM JSON
+      fs.readFile('./pid', 'utf8', (err, data) => {
+        if (err) {
+          rej(err);
+        }
+        res(parseInt(data));
+      })
+    })
+  }
+
+  killElectronPID = (pid) => {
+    return new Promise((res, rej) => {
+      exec(`kill ${pid}`, (error, stdout, stderr) => {
+        if (error) {
+          console.error(`exec error: ${error}`);
+          console.error(`exec error code: ${error.code}`);
+          rej({
+            'error': error
+          })
+        }
+
+        // successfully killed previously running electron
+        setTimeout(() => {
+          res(0)
+        }, 3000);
+
+      });
+    })
+  }
+
+  runCommand = (command) => {
+    const child = exec(command, (error, stdout, stderr) => {
+      if (error) {
+        console.error(`exec error: ${error}`);
+        console.error(`exec error code: ${error.code}`);
+      }
+    });
+
+    return child.pid
+  }
+
+  startElectron = (version) => {
+    let electronCommand = `${this.ELECTRON_BASE_DIR}/${this.getElectronFolderName(version)}`;
+
+    if (electronCommand.includes(DARWIN)) {
+      electronCommand = `${electronCommand}/Electron.app/Contents/MacOS/Electron`
+    }
+    const command = `${electronCommand} ${this.APP_DIRECTORY}  & echo $! > ${this.PID_FILE}`;
+
+    return this.runCommand(command);
+  }
+
+  unzipElectron = (version) => {
+    const zipFilename = this.getElectronZipFilename(version);
+    const zipExtractDir = this.getElectronFolderName(version);
+    const command = `unzip ${zipFilename} -d ${zipExtractDir}`;
+    return this.runCommand(command);
+  }
 }
 
 const em = new ElectronUpdateManager();
 
 app.get('/', (req, res) => res.send('Hello World!'))
 
+//-------------------------
+// ELECTRON ENDPOINTS
+//-------------------------
 app.post('/latest/electron', (req, res) => {
   const latestVersion = em.flipElectronUpdate(req.body.currentVersion);
   res.send({ latest: latestVersion });
@@ -87,6 +162,32 @@ app.post('/latest/electron', (req, res) => {
 app.get('/download/electron/:version',  async (req, res) => {
   const data = await em.downloadElectronUpdate(req.params.version);
   res.send({data: data});
+});
+
+app.post('/install/electron/:version', async (req, res) => {
+  /*
+  *  To install the steps are:
+  *   1. Unzip the electron dist
+  *   2. Kill the Electron PID
+  *   3. Start the new Electron
+  */
+
+  const version = req.params.version;
+  em.unzipElectron(version);
+
+  try {
+    let PID = await em.getElectronPID();
+    let killOutput = await em.killElectronPID(PID);
+
+    if (killOutput === 0) {
+      let electronPID = await em.startElectron(version);
+      res.send({ pid: electronPID });
+    } else { throw 'something went wrong with the server'; }
+  } catch(e) {
+    console.log(e)
+    res.sendStatus(500);
+  }
+
 });
 
 app.listen(port, () => console.log(`Electron Update Manager running on port: ${port}!`))

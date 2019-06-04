@@ -4,3 +4,4 @@ update.json
 node_modules
 package-lock.json
 *.zip
+electron-*
