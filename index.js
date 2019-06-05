@@ -24,6 +24,7 @@ const PID_FILE = 'pidFile';
 
 // CONSTS
 const DARWIN = 'darwin';
+const LINUX = 'linux';
 
 // MIDDLEWARE
 app.use(bodyParser.json());
@@ -133,6 +134,10 @@ class ElectronUpdateManager {
 
     if (electronCommand.includes(DARWIN)) {
       electronCommand = `${electronCommand}/Electron.app/Contents/MacOS/Electron`
+    } else if (electronCommand.includes(LINUX)) {
+      electronCommand = `${electronCommand}/electron`
+    } else {
+      throw Error('OS is not supported!')
     }
     const command = `${electronCommand} ${this.APP_DIRECTORY}  & echo $! > ${this.PID_FILE}`;
 
